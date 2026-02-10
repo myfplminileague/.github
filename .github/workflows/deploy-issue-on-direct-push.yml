@@ -1,0 +1,148 @@
+name: Create Deploy Issue on Direct Push
+
+on:
+  workflow_call:
+    inputs:
+      deploy-commands:
+        description: "Repo-specific deploy commands to include in the issue body"
+        required: true
+        type: string
+
+jobs:
+  create-deploy-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check for direct push and create issue
+        uses: actions/github-script@v7
+        env:
+          DEPLOY_COMMANDS: ${{ inputs.deploy-commands }}
+        with:
+          script: |
+            const headCommit = context.payload.head_commit;
+            if (!headCommit) {
+              core.info('No head commit found, skipping.');
+              return;
+            }
+
+            // Check if this commit is associated with a merged PR
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: headCommit.id,
+            });
+
+            const mergedPR = prs.find(pr => pr.merged_at !== null);
+            if (mergedPR) {
+              core.info(`Commit associated with merged PR #${mergedPR.number}, skipping.`);
+              return;
+            }
+
+            // This is a direct push - gather commit info
+            const commits = context.payload.commits || [];
+            const commitRows = commits.map(c => {
+              const shortSha = c.id.substring(0, 7);
+              const msg = c.message.split('\n')[0];
+              const author = c.author.username || c.author.name;
+              return `| \`${shortSha}\` | ${msg} | @${author} |`;
+            }).join('\n');
+
+            // Get all files changed across pushed commits
+            let files = '_Unable to determine changed files_';
+            const before = context.payload.before;
+            const after = context.payload.after;
+
+            if (before && !/^0+$/.test(before)) {
+              try {
+                const { data: comparison } = await github.rest.repos.compareCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  base: before,
+                  head: after,
+                });
+                files = (comparison.files || []).map(f => `- \`${f.filename}\` (${f.status})`).join('\n');
+              } catch (e) {
+                core.warning(`Failed to compare commits: ${e.message}`);
+              }
+            }
+
+            if (files === '_Unable to determine changed files_') {
+              try {
+                const { data: commitDetail } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: headCommit.id,
+                });
+                files = (commitDetail.files || []).map(f => `- \`${f.filename}\` (${f.status})`).join('\n');
+              } catch (e) {
+                core.warning(`Failed to get commit details: ${e.message}`);
+              }
+            }
+
+            // Ensure labels exist on the calling repo
+            const labelDefs = [
+              { name: 'ready-for-deployment', color: '0E8A16', description: 'Changes on main that need deployment' },
+              { name: 'direct-push', color: 'E99695', description: 'Pushed directly to main without a PR' },
+            ];
+            for (const def of labelDefs) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: def.name,
+                });
+              } catch {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ...def,
+                });
+              }
+            }
+
+            // Build issue body
+            const pusher = context.actor;
+            const summary = headCommit.message.split('\n')[0];
+            const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+            const deployCommands = process.env.DEPLOY_COMMANDS;
+
+            const body = [
+              '## Direct Push to `main` — Ready for Deployment',
+              '',
+              `**Pushed by**: @${pusher}`,
+              `**Repo**: \`${context.repo.owner}/${context.repo.repo}\``,
+              `**Date**: ${now} UTC`,
+              '',
+              '### Commits',
+              '',
+              '| SHA | Message | Author |',
+              '|-----|---------|--------|',
+              commitRows,
+              '',
+              '### Files Changed',
+              '',
+              files || '_No file details available_',
+              '',
+              '### Deploy Commands',
+              '',
+              '```bash',
+              deployCommands,
+              '```',
+              '',
+              '---',
+              '> This issue was auto-created because changes were pushed directly to `main` without a PR.',
+              '> Close this issue after deploying.',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Deploy] ${summary} (direct push by @${pusher})`,
+              body,
+              labels: ['ready-for-deployment', 'direct-push'],
+            });
+
+            core.info(`Deploy issue created for direct push by @${pusher}`);
