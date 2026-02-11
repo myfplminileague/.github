@@ -1,3 +1,7 @@
+# Reusable Workflow: Create Deploy Issue on Direct Push
+# Called by individual repos when someone pushes directly to main without a PR.
+# Creates a tracking issue and adds it to the org project board with "Deployment" status.
+
 name: Create Deploy Issue on Direct Push
 
 on:
@@ -7,6 +11,10 @@ on:
         description: "Repo-specific deploy commands to include in the issue body"
         required: true
         type: string
+    secrets:
+      PROJECT_PAT:
+        description: "PAT with project write access for Projects v2 mutations"
+        required: true
 
 jobs:
   create-deploy-issue:
@@ -21,6 +29,7 @@ jobs:
         env:
           DEPLOY_COMMANDS: ${{ inputs.deploy-commands }}
         with:
+          github-token: ${{ secrets.PROJECT_PAT }}
           script: |
             const headCommit = context.payload.head_commit;
             if (!headCommit) {
@@ -41,7 +50,86 @@ jobs:
               return;
             }
 
-            // This is a direct push - gather commit info
+            // =================================================================
+            // HELPER: Add an issue to the org project with "Deployment" status
+            // =================================================================
+            async function addToProjectWithDeploymentStatus(issueNodeId) {
+              const projectQuery = `query($org: String!, $number: Int!) {
+                organization(login: $org) {
+                  projectV2(number: $number) {
+                    id
+                    field(name: "Status") {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }`;
+
+              const projectData = await github.graphql(projectQuery, {
+                org: 'myfplminileague',
+                number: 1,
+              });
+
+              const projectId = projectData.organization.projectV2.id;
+              const statusField = projectData.organization.projectV2.field;
+              const deploymentOption = statusField.options.find(
+                (opt) => opt.name === 'Deployment',
+              );
+
+              if (!deploymentOption) {
+                core.error(
+                  'Could not find "Deployment" status option in project. Available: ' +
+                    statusField.options.map((o) => o.name).join(', '),
+                );
+                return;
+              }
+
+              const addItemMutation = `mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {
+                  projectId: $projectId
+                  contentId: $contentId
+                }) {
+                  item { id }
+                }
+              }`;
+
+              const addResult = await github.graphql(addItemMutation, {
+                projectId,
+                contentId: issueNodeId,
+              });
+
+              const itemId = addResult.addProjectV2ItemById.item.id;
+
+              const updateStatusMutation = `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item { id }
+                }
+              }`;
+
+              await github.graphql(updateStatusMutation, {
+                projectId,
+                itemId,
+                fieldId: statusField.id,
+                optionId: deploymentOption.id,
+              });
+
+              core.info('Added issue to project with "Deployment" status');
+            }
+
+            // =================================================================
+            // Gather commit info
+            // =================================================================
             const commits = context.payload.commits || [];
             const commitRows = commits.map(c => {
               const shortSha = c.id.substring(0, 7);
@@ -82,28 +170,9 @@ jobs:
               }
             }
 
-            // Ensure labels exist on the calling repo
-            const labelDefs = [
-              { name: 'ready-for-deployment', color: '0E8A16', description: 'Changes on main that need deployment' },
-              { name: 'direct-push', color: 'E99695', description: 'Pushed directly to main without a PR' },
-            ];
-            for (const def of labelDefs) {
-              try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: def.name,
-                });
-              } catch {
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ...def,
-                });
-              }
-            }
-
-            // Build issue body
+            // =================================================================
+            // Create the deploy tracking issue
+            // =================================================================
             const pusher = context.actor;
             const summary = headCommit.message.split('\n')[0];
             const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -134,15 +203,19 @@ jobs:
               '',
               '---',
               '> This issue was auto-created because changes were pushed directly to `main` without a PR.',
-              '> Close this issue after deploying.',
+              '> Move to "Done" on the project board after deploying.',
             ].join('\n');
 
-            await github.rest.issues.create({
+            const newIssue = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `[Deploy] ${summary} (direct push by @${pusher})`,
+              title: `Deploy: ${summary} (direct push by @${pusher})`,
               body,
-              labels: ['ready-for-deployment', 'direct-push'],
             });
 
-            core.info(`Deploy issue created for direct push by @${pusher}`);
+            core.info(`Created deploy issue #${newIssue.data.number}`);
+
+            // Add to project with "Deployment" status
+            await addToProjectWithDeploymentStatus(newIssue.data.node_id);
+
+            core.info(`Deploy issue #${newIssue.data.number} added to project with Deployment status`);
