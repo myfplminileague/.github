@@ -38,7 +38,45 @@ jobs:
               return;
             }
 
-            // Check if this commit is associated with a merged PR
+            // =================================================================
+            // Guard: Skip if this push is actually a PR merge (not a direct push)
+            //
+            // Two-stage check to handle a race condition with squash merges:
+            // GitHub fires the `push` event instantly, but the internal index
+            // linking the new squash commit SHA back to its PR is not yet
+            // populated at that point — so listPullRequestsAssociatedWithCommit
+            // returns [] even though it IS a PR merge, causing a spurious
+            // "Deploy:" issue to be created alongside the correct one from
+            // deployment-tracking.yml.
+            //
+            // Stage 1 (fast path): Parse commit message for "(#NNN)" suffix.
+            //   Squash merges always produce a commit message ending in "(#NNN)".
+            //   We look that PR up directly — synchronous, no indexing delay.
+            //
+            // Stage 2 (fallback): Use the GitHub API to list associated PRs.
+            //   Catches regular merge commits which don't have the "(#NNN)" pattern.
+            // =================================================================
+
+            // Stage 1: Squash merge detection via commit message
+            const squashPrMatch = headCommit.message.match(/\(#(\d+)\)\s*$/m);
+            if (squashPrMatch) {
+              const prNumber = parseInt(squashPrMatch[1], 10);
+              try {
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                });
+                if (pr.merged_at !== null) {
+                  core.info(`Commit message references merged PR #${prNumber} (squash merge) — not a direct push. Skipping.`);
+                  return;
+                }
+              } catch (e) {
+                core.warning(`Could not verify PR #${prNumber} from commit message: ${e.message}`);
+              }
+            }
+
+            // Stage 2: Fallback API check (handles regular merge commits)
             const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -47,7 +85,7 @@ jobs:
 
             const mergedPR = prs.find(pr => pr.merged_at !== null);
             if (mergedPR) {
-              core.info(`Commit associated with merged PR #${mergedPR.number}, skipping.`);
+              core.info(`Commit associated with merged PR #${mergedPR.number} — not a direct push. Skipping.`);
               return;
             }
 
