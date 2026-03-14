@@ -260,12 +260,29 @@ jobs:
               '---',
               '> This issue was auto-created because changes were pushed directly to `main` without a PR.',
               '> Move to "Done" on the project board after deploying.',
+              '',
+              '### Priority',
+              '',
+              'P2',
+              '',
+              '### Impact',
+              '',
+              'Low',
+              '',
+              '### Effort',
+              '',
+              'XS (1-2 h)',
+              '',
+              '### Team / Squad',
+              '',
+              'DevOps',
             ].join('\n');
 
             const newIssue = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Deploy: ${summary} (direct push by @${pusher})`,
+              labels: ['deploy-tracking'],
               body,
             });
 
