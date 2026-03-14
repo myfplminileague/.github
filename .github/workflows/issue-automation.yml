@@ -1,0 +1,256 @@
+# Issue Automation — Reusable Workflow
+# Called by individual repos on `issues: opened` to:
+#   1. Parse form fields from the issue body (GitHub renders dropdowns as ### headers)
+#   2. Apply labels for Chore sub-type dropdown (CI/CD → ci, Refactor → refactor, etc.)
+#   3. Add the issue to the org project board
+#   4. Set custom fields: Priority, Impact, Effort, Team/Squad, Status=Todo
+
+name: Issue Automation
+
+on:
+  workflow_call:
+    secrets:
+      PROJECT_PAT:
+        required: true
+
+permissions:
+  issues: write
+
+jobs:
+  automate-issue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Parse form fields and set project board fields
+        uses: actions/github-script@v7
+        env:
+          PROJECT_PAT: ${{ secrets.PROJECT_PAT }}
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+
+            // =================================================================
+            // HELPER: Parse a form field value from the issue body
+            // GitHub Issue Forms render dropdowns as: ### Field Name\n\n<value>\n
+            // =================================================================
+            function parseFormField(body, fieldName) {
+              const regex = new RegExp(`### ${fieldName}\\s*\\n\\s*\\n([^\\n]+)`, 'i');
+              const match = body.match(regex);
+              if (!match) return null;
+              const value = match[1].trim();
+              // GitHub renders empty optional fields as "_No response_"
+              return value === '_No response_' ? null : value;
+            }
+
+            // =================================================================
+            // Step 1: Apply labels for Chore sub-type dropdown
+            // =================================================================
+            const subType = parseFormField(body, 'Sub-type');
+            if (subType) {
+              const subTypeToLabel = {
+                'Chore': 'chore',
+                'CI/CD': 'ci',
+                'Refactor': 'refactor',
+                'Performance': 'performance',
+                'Test': 'test',
+              };
+
+              const label = subTypeToLabel[subType];
+              if (label) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [label],
+                });
+                core.info(`Applied label "${label}" from sub-type "${subType}"`);
+              }
+            }
+
+            // =================================================================
+            // Step 2: Parse project board field values
+            // =================================================================
+            const priority = parseFormField(body, 'Priority');
+            const impact = parseFormField(body, 'Impact');
+            const effortRaw = parseFormField(body, 'Effort');
+            const team = parseFormField(body, 'Team / Squad');
+
+            // Strip effort description suffix: "XS (1-2 h)" → "XS"
+            const effort = effortRaw ? effortRaw.replace(/\s*\(.*\)$/, '') : null;
+
+            core.info(`Parsed fields — Priority: ${priority}, Impact: ${impact}, Effort: ${effort}, Team: ${team}`);
+
+            // =================================================================
+            // HELPER: GraphQL with PROJECT_PAT
+            // =================================================================
+            async function graphqlWithPAT(query, variables = {}) {
+              const response = await fetch('https://api.github.com/graphql', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `bearer ${process.env.PROJECT_PAT}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ query, variables }),
+              });
+              const result = await response.json();
+              if (result.errors) {
+                throw new Error(result.errors.map(e => e.message).join(', '));
+              }
+              return result.data;
+            }
+
+            // =================================================================
+            // Step 3: Add issue to the org project board
+            // =================================================================
+            const PROJECT_ID = 'PVT_kwDODwNqDM4BLkdl';
+            const issueNodeId = issue.node_id;
+
+            const addItemMutation = `mutation($projectId: ID!, $contentId: ID!) {
+              addProjectV2ItemById(input: {
+                projectId: $projectId
+                contentId: $contentId
+              }) {
+                item {
+                  id
+                }
+              }
+            }`;
+
+            let itemId;
+            try {
+              const addResult = await graphqlWithPAT(addItemMutation, {
+                projectId: PROJECT_ID,
+                contentId: issueNodeId,
+              });
+              itemId = addResult.addProjectV2ItemById.item.id;
+              core.info(`Added issue #${issue.number} to project board (item: ${itemId})`);
+            } catch (error) {
+              core.warning(`Failed to add to project (may already exist): ${error.message}`);
+              // If already added, try to find the existing item
+              const findQuery = `query($projectId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    items(first: 100, orderBy: {field: POSITION, direction: DESC}) {
+                      nodes {
+                        id
+                        content {
+                          ... on Issue {
+                            number
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }`;
+              try {
+                const findResult = await graphqlWithPAT(findQuery, { projectId: PROJECT_ID });
+                const existingItem = findResult.node.items.nodes.find(
+                  n => n.content?.number === issue.number
+                );
+                if (existingItem) {
+                  itemId = existingItem.id;
+                  core.info(`Found existing project item: ${itemId}`);
+                }
+              } catch (findError) {
+                core.error(`Failed to find existing item: ${findError.message}`);
+              }
+            }
+
+            if (!itemId) {
+              core.error('Could not get project item ID — skipping field updates');
+              return;
+            }
+
+            // =================================================================
+            // Step 4: Set custom fields via updateProjectV2ItemFieldValue
+            // =================================================================
+
+            // Field IDs and option mappings
+            const FIELDS = {
+              priority: {
+                fieldId: 'PVTSSF_lADODwNqDM4BLkdlzg7GvFE',
+                options: { 'P0': 'd2af39b5', 'P1': '8ab7523d', 'P2': '489d5fdc' },
+              },
+              impact: {
+                fieldId: 'PVTSSF_lADODwNqDM4BLkdlzg7GwoQ',
+                options: { 'High': '3f882142', 'Medium': 'dfbf2d2d', 'Low': '586084fd' },
+              },
+              effort: {
+                fieldId: 'PVTSSF_lADODwNqDM4BLkdlzg7GvFI',
+                options: { 'XS': '17f51834', 'S': '490beb7e', 'M': 'b6e15b6b', 'L': '3104d5c3', 'XL': '2f0cf0f4' },
+              },
+              team: {
+                fieldId: 'PVTSSF_lADODwNqDM4BLkdlzg7GwOc',
+                options: {
+                  'Front End': '6285b10a',
+                  'Back End': '81e0a9e9',
+                  'Full Stack': '9a24072f',
+                  'DevOps': '3dc52b1e',
+                  'Design / UX': '7ebf6725',
+                  'QA / Testing': '7a3243ae',
+                  'Product Brainstorming': '4f5a5965',
+                  'Admin / Housekeeping': '833e4fbe',
+                },
+              },
+              status: {
+                fieldId: 'PVTSSF_lADODwNqDM4BLkdlzg7GrBA',
+                options: { 'Todo': 'f75ad846' },
+              },
+            };
+
+            const updateMutation = `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $projectId
+                itemId: $itemId
+                fieldId: $fieldId
+                value: { singleSelectOptionId: $optionId }
+              }) {
+                projectV2Item {
+                  id
+                }
+              }
+            }`;
+
+            // Build list of field updates to apply
+            const updates = [];
+
+            // Always set Status = Todo
+            updates.push({ name: 'Status', fieldId: FIELDS.status.fieldId, optionId: FIELDS.status.options['Todo'] });
+
+            if (priority && FIELDS.priority.options[priority]) {
+              updates.push({ name: 'Priority', fieldId: FIELDS.priority.fieldId, optionId: FIELDS.priority.options[priority] });
+            }
+
+            if (impact && FIELDS.impact.options[impact]) {
+              updates.push({ name: 'Impact', fieldId: FIELDS.impact.fieldId, optionId: FIELDS.impact.options[impact] });
+            }
+
+            if (effort && FIELDS.effort.options[effort]) {
+              updates.push({ name: 'Effort', fieldId: FIELDS.effort.fieldId, optionId: FIELDS.effort.options[effort] });
+            }
+
+            if (team && FIELDS.team.options[team]) {
+              updates.push({ name: 'Team', fieldId: FIELDS.team.fieldId, optionId: FIELDS.team.options[team] });
+            }
+
+            // Execute all updates in parallel
+            const results = await Promise.allSettled(
+              updates.map(async ({ name, fieldId, optionId }) => {
+                await graphqlWithPAT(updateMutation, {
+                  projectId: PROJECT_ID,
+                  itemId,
+                  fieldId,
+                  optionId,
+                });
+                core.info(`Set ${name} on project board`);
+              })
+            );
+
+            // Report any failures
+            for (const [i, result] of results.entries()) {
+              if (result.status === 'rejected') {
+                core.error(`Failed to set ${updates[i].name}: ${result.reason}`);
+              }
+            }

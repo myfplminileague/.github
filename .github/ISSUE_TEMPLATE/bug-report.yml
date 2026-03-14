@@ -1,0 +1,90 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: How will we know the bug is fixed?
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this bug?
+      options:
+        - P0
+        - P1
+        - P2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: How many users or workflows are affected?
+      options:
+        - High
+        - Medium
+        - Low
+    validations:
+      required: true
+
+  - type: dropdown
+    id: effort
+    attributes:
+      label: Effort
+      description: Estimated effort to fix.
+      options:
+        - XS (1-2 h)
+        - S (3-8 h)
+        - M (1-2 d)
+        - L (3-5 d)
+        - XL (>7 d)
+    validations:
+      required: false
+
+  - type: dropdown
+    id: team
+    attributes:
+      label: Team / Squad
+      description: Which team owns this?
+      options:
+        - Front End
+        - Back End
+        - Full Stack
+        - DevOps
+        - Design / UX
+        - QA / Testing
+        - Product Brainstorming
+        - Admin / Housekeeping
+    validations:
+      required: false

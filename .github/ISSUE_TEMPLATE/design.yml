@@ -1,0 +1,78 @@
+name: Design
+description: Design work, UI/UX improvements, or visual changes
+labels: ["design"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What design work needs to be done?
+      placeholder: Describe the design task and its context.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: How will we know the design work is complete?
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this design work?
+      options:
+        - P0
+        - P1
+        - P2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: How significant is the impact on users?
+      options:
+        - High
+        - Medium
+        - Low
+    validations:
+      required: true
+
+  - type: dropdown
+    id: effort
+    attributes:
+      label: Effort
+      description: Estimated effort.
+      options:
+        - XS (1-2 h)
+        - S (3-8 h)
+        - M (1-2 d)
+        - L (3-5 d)
+        - XL (>7 d)
+    validations:
+      required: false
+
+  - type: dropdown
+    id: team
+    attributes:
+      label: Team / Squad
+      description: Which team owns this?
+      options:
+        - Front End
+        - Back End
+        - Full Stack
+        - DevOps
+        - Design / UX
+        - QA / Testing
+        - Product Brainstorming
+        - Admin / Housekeeping
+    validations:
+      required: false
