@@ -13,12 +13,11 @@ on:
       PROJECT_PAT:
         required: true
 
-permissions:
-  issues: write
-
 jobs:
   automate-issue:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
 
     steps:
       - name: Parse form fields and set project board fields

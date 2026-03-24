@@ -1,0 +1,54 @@
+# Reusable Workflow: Slack Notification on PR Review Request
+# Called by individual repos when a PR review is requested.
+# Centralizes GitHub-to-Slack user ID mappings for the org.
+
+name: PR Review Slack Notify
+
+on:
+  workflow_call:
+    secrets:
+      SLACK_WORKFLOW_WEBHOOK_URL:
+        description: "Slack Workflow Builder webhook URL"
+        required: true
+
+jobs:
+  notify-slack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send review request to Slack workflow
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WORKFLOW_WEBHOOK_URL }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REVIEWER_LOGIN: ${{ github.event.requested_reviewer.login }}
+        run: |
+          # Map GitHub logins to Slack user IDs
+          case "$REVIEWER_LOGIN" in
+            "adigunners")    REVIEWER_SLACK_ID="U0A535NPBEX" ;;
+            "sarinsaurabh")  REVIEWER_SLACK_ID="U0A57FCRKKQ" ;;
+            "Shashwat-Nandan") REVIEWER_SLACK_ID="U0A5VLK3T5J" ;;
+            "devyanshigarg") REVIEWER_SLACK_ID="U0A56491PGV" ;;
+            *)               REVIEWER_SLACK_ID="$REVIEWER_LOGIN" ;;
+          esac
+
+          case "$PR_AUTHOR" in
+            "adigunners")    AUTHOR_SLACK_ID="U0A535NPBEX" ;;
+            "sarinsaurabh")  AUTHOR_SLACK_ID="U0A57FCRKKQ" ;;
+            "Shashwat-Nandan") AUTHOR_SLACK_ID="U0A5VLK3T5J" ;;
+            "devyanshigarg") AUTHOR_SLACK_ID="U0A56491PGV" ;;
+            *)               AUTHOR_SLACK_ID="$PR_AUTHOR" ;;
+          esac
+
+          # Send raw user IDs — Slack Workflow Builder renders mentions
+          # when variable type is set to "User ID"
+          payload=$(jq -n \
+            --arg reviewer_slack_id "$REVIEWER_SLACK_ID" \
+            --arg author_name "$AUTHOR_SLACK_ID" \
+            --arg pr_url "$PR_URL" \
+            '{ reviewer_slack_id: $reviewer_slack_id, author_name: $author_name, pr_url: $pr_url }')
+
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$SLACK_WEBHOOK_URL"
